@@ -1,0 +1,10 @@
+streamlit
+opencv-python-headless
+numpy
+Pillow
+mediapipe
+streamlit-option-menu
+fpdf
+pandas
+torch
+tqdm
