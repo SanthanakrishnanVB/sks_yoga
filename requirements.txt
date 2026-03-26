@@ -5,7 +5,7 @@ numpy
 Pillow
 mediapipe==0.10.14
 streamlit-option-menu
-fpdf
+fpdf2
 pandas
 torch
 tqdm
