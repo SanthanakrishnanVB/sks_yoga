@@ -231,18 +231,23 @@ dynamic_bg_global = st.empty()
 # ==========================================
 
 # --- 1. LIVE WEBCAM MODE (DEPLOYMENT READY) ---
+# --- 1. LIVE WEBCAM MODE (DEPLOYMENT READY) ---
 if selected == "Live Tracking":
     col_video, col_dashboard = st.columns([2, 1]) 
     
-    # 1. Setup a thread-safe queue to pass data from the video stream to the Streamlit UI
+    # 1. Setup a thread-safe queue 
     if 'webrtc_queue' not in st.session_state:
         st.session_state.webrtc_queue = queue.Queue(maxsize=2)
+
+    # 🚨 THE FIX: Create a local reference to the queue outside the callback! 🚨
+    # This allows the background thread to access it without calling st.session_state
+    video_queue = st.session_state.webrtc_queue
 
     with col_video:
         st.markdown("### Real-Time Posture AI")
         st.info("Click 'START' below and allow camera permissions.")
         
-        # 2. The Video Callback: Processes the frame and draws the skeleton
+        # 2. The Video Callback
         def video_frame_callback(frame):
             try:
                 # Convert browser frame to OpenCV format
@@ -256,22 +261,18 @@ if selected == "Live Tracking":
                 if landmarks:
                     img = draw_colored_skeleton(img, landmarks, feedback)
                     
-                # Send results to the main thread Queue for the dashboard updates
+                # 🚨 THE FIX: Use the local 'video_queue' variable here! 🚨
                 try:
-                    st.session_state.webrtc_queue.put_nowait((pred_class, conf, feedback, img.copy()))
+                    video_queue.put_nowait((pred_class, conf, feedback, img.copy()))
                 except queue.Full:
-                    pass # Ignore if the queue is full to prevent video lag
+                    pass 
                     
-                # Send the drawn frame back to the browser widget
                 return av.VideoFrame.from_ndarray(img, format="bgr24")
                 
             except Exception as e:
-                # Catch any AI crashes so the video stream doesn't freeze
                 import traceback
                 print("🚨 WEBRTC BACKGROUND ERROR 🚨")
                 print(traceback.format_exc())
-                
-                # Return the raw, unprocessed frame to keep the video moving
                 return frame
 
         # 3. Start the WebRTC Streamer
