@@ -75,59 +75,34 @@ def reset_report():
 # CUSTOM DRAWING & PDF LOGIC
 # ==========================================
 def draw_colored_skeleton(image, landmarks, feedback):
-    """Draws correct joints in green and incorrect joints/bones in red."""
-    JOINT_MAP = {
-        "left knee": [mp_pose.PoseLandmark.LEFT_KNEE.value],
-        "right knee": [mp_pose.PoseLandmark.RIGHT_KNEE.value],
-        "left elbow": [mp_pose.PoseLandmark.LEFT_ELBOW.value],
-        "right elbow": [mp_pose.PoseLandmark.RIGHT_ELBOW.value],
-        "left shoulder": [mp_pose.PoseLandmark.LEFT_SHOULDER.value],
-        "right shoulder": [mp_pose.PoseLandmark.RIGHT_SHOULDER.value],
-        "left hip": [mp_pose.PoseLandmark.LEFT_HIP.value],
-        "right hip": [mp_pose.PoseLandmark.RIGHT_HIP.value],
-        "left ankle": [mp_pose.PoseLandmark.LEFT_ANKLE.value],
-        "right ankle": [mp_pose.PoseLandmark.RIGHT_ANKLE.value],
-        "left wrist": [mp_pose.PoseLandmark.LEFT_WRIST.value],
-        "right wrist": [mp_pose.PoseLandmark.RIGHT_WRIST.value],
-    }
-
-    wrong_joints = set()
-    if feedback and feedback[0] != "Perfect Posture!":
-        for f in feedback:
-            f_lower = f.lower()
-            found = False
-            for key, indices in JOINT_MAP.items():
-                if key in f_lower:
-                    wrong_joints.update(indices)
-                    found = True
-            if not found:
-                if "knee" in f_lower: wrong_joints.update([mp_pose.PoseLandmark.LEFT_KNEE.value, mp_pose.PoseLandmark.RIGHT_KNEE.value])
-                if "elbow" in f_lower: wrong_joints.update([mp_pose.PoseLandmark.LEFT_ELBOW.value, mp_pose.PoseLandmark.RIGHT_ELBOW.value])
-                if "shoulder" in f_lower: wrong_joints.update([mp_pose.PoseLandmark.LEFT_SHOULDER.value, mp_pose.PoseLandmark.RIGHT_SHOULDER.value])
-                if "hip" in f_lower: wrong_joints.update([mp_pose.PoseLandmark.LEFT_HIP.value, mp_pose.PoseLandmark.RIGHT_HIP.value])
-                if "back" in f_lower or "spine" in f_lower: 
-                    wrong_joints.update([mp_pose.PoseLandmark.LEFT_SHOULDER.value, mp_pose.PoseLandmark.RIGHT_SHOULDER.value, 
-                                         mp_pose.PoseLandmark.LEFT_HIP.value, mp_pose.PoseLandmark.RIGHT_HIP.value])
-
+    """Draws the skeleton using a constant color."""
     h, w, _ = image.shape
-    green = (0, 255, 0)
-    red = (0, 0, 255)
+    
+    # Define your constant color here (B, G, R format). 
+    # (0, 255, 0) is Green. 
+    constant_color = (0, 255, 0) 
 
+    # Draw the bones (connections)
     for connection in mp_pose.POSE_CONNECTIONS:
         start_idx, end_idx = connection[0], connection[1]
         start_lm, end_lm = landmarks.landmark[start_idx], landmarks.landmark[end_idx]
-        if start_lm.visibility < 0.3 or end_lm.visibility < 0.3: continue
+        
+        # Only draw if the joints are visible enough
+        if start_lm.visibility < 0.3 or end_lm.visibility < 0.3: 
+            continue
             
         start_point = (int(start_lm.x * w), int(start_lm.y * h))
         end_point = (int(end_lm.x * w), int(end_lm.y * h))
-        color = red if (start_idx in wrong_joints or end_idx in wrong_joints) else green
-        cv2.line(image, start_point, end_point, color, 4)
         
+        cv2.line(image, start_point, end_point, constant_color, 4)
+        
+    # Draw the joints (landmarks)
     for idx, lm in enumerate(landmarks.landmark):
-        if lm.visibility < 0.3: continue
+        if lm.visibility < 0.3: 
+            continue
+            
         point = (int(lm.x * w), int(lm.y * h))
-        color = red if idx in wrong_joints else green
-        cv2.circle(image, point, 6, color, -1)
+        cv2.circle(image, point, 6, constant_color, -1)
         
     return image
 
@@ -266,6 +241,7 @@ if selected == "Live Tracking":
         ui_pose = st.empty()
         ui_conf = st.empty()
         ui_status = st.empty()
+        ui_feedback = st.empty() # Added placeholder for real-time text feedback
 
     if run_webcam:
         cap = cv2.VideoCapture(0)
@@ -300,14 +276,20 @@ if selected == "Live Tracking":
                     })
                 last_capture_time = current_time
 
+            # Handle Real-Time textual Feedback Display
             if feedback and feedback[0] == "Perfect Posture!":
                 ui_status.success("🟢 Perfect Posture!")
+                ui_feedback.empty() # Clear out old errors
                 dynamic_bg_global.markdown("<style>.stApp { background-color: #4ade80 !important; }</style>", unsafe_allow_html=True)
             elif feedback and "Please step into the frame" in feedback[0]:
                 ui_status.warning("🟡 Waiting for user...")
+                ui_feedback.empty()
                 dynamic_bg_global.markdown("<style>.stApp { background-color: #F4F7F6 !important; }</style>", unsafe_allow_html=True)
             else:
-                ui_status.error("🔴 Corrections highlighted on skeleton")
+                ui_status.error("🔴 Corrections needed:")
+                # Create a bulleted list for immediate real-time feedback
+                feedback_html = "".join([f"<li>{f}</li>" for f in feedback])
+                ui_feedback.markdown(f"<ul style='color: #E74C3C; font-weight: bold;'>{feedback_html}</ul>", unsafe_allow_html=True)
                 dynamic_bg_global.markdown("<style>.stApp { background-color: #F4F7F6 !important; }</style>", unsafe_allow_html=True)
                 
         cap.release()
@@ -350,11 +332,14 @@ elif selected == "Analyze Image":
                 st.markdown(f"<h2 style='text-align: center; color: #3498DB; padding: 15px; background-color: white; border-radius: 10px; box-shadow: 0px 4px 6px rgba(0,0,0,0.1); margin-bottom: 20px;'>🧘 {pred_class}</h2>", unsafe_allow_html=True)
                 st.progress(int(conf) / 100.0, text=f"Confidence: {conf:.1f}%")
                 
+                # Show Feedback Details Instantly
                 if feedback and feedback[0] == "Perfect Posture!":
                     st.success("🟢 Perfect Posture!")
                     dynamic_bg_global.markdown("<style>.stApp { background-color: #4ade80 !important; }</style>", unsafe_allow_html=True)
                 else:
-                    st.error("🔴 Corrections highlighted on skeleton")
+                    st.error("🔴 Corrections needed:")
+                    for f in feedback:
+                        st.write(f"- {f}")
                     dynamic_bg_global.markdown("<style>.stApp { background-color: #F4F7F6 !important; }</style>", unsafe_allow_html=True)
 
             img_path = os.path.join(TEMP_DIR, "image_analysis.jpg")
@@ -406,6 +391,7 @@ elif selected == "Analyze Video":
                 ui_pose = st.empty()
                 ui_conf = st.empty()
                 ui_status = st.empty()
+                ui_feedback = st.empty() # Added placeholder for real-time video text feedback
             
             cap = cv2.VideoCapture(temp_video_path)
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -496,12 +482,15 @@ elif selected == "Analyze Video":
                             last_captured_conf = conf
                             last_capture_sec = seconds
 
-                # Background Color Update
+                # Background Color Update and Real-Time Text Updates
                 if is_perfect:
                     ui_status.success("🟢 Perfect Posture!")
+                    ui_feedback.empty()
                     dynamic_bg_global.markdown("<style>.stApp { background-color: #4ade80 !important; }</style>", unsafe_allow_html=True)
                 else:
-                    ui_status.error("🔴 Corrections needed")
+                    ui_status.error("🔴 Corrections needed:")
+                    feedback_html = "".join([f"<li>{f}</li>" for f in feedback])
+                    ui_feedback.markdown(f"<ul style='color: #E74C3C; font-weight: bold;'>{feedback_html}</ul>", unsafe_allow_html=True)
                     dynamic_bg_global.markdown("<style>.stApp { background-color: #F4F7F6 !important; }</style>", unsafe_allow_html=True)
                 
                 current_frame += 1
