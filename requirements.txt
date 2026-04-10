@@ -9,3 +9,5 @@ fpdf2
 pandas
 torch
 tqdm
+streamlit-webrtc
+av
