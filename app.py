@@ -14,7 +14,7 @@ import pandas as pd
 from streamlit_webrtc import webrtc_streamer, RTCConfiguration
 import av
 import queue
-
+import traceback
 # ==========================================
 # PAGE CONFIGURATION & MOBILE-RESPONSIVE CSS
 # ==========================================
@@ -244,25 +244,35 @@ if selected == "Live Tracking":
         
         # 2. The Video Callback: Processes the frame and draws the skeleton
         def video_frame_callback(frame):
-            # Convert browser frame to OpenCV format
-            img = frame.to_ndarray(format="bgr24")
-            img = cv2.flip(img, 1) # Mirror the image
-            
-            # Run AI model
-            pred_class, conf, feedback, landmarks = yoga_ai._process_frame_logic(img, return_landmarks=True)
-            
-            # Draw the skeleton
-            if landmarks:
-                img = draw_colored_skeleton(img, landmarks, feedback)
-                
-            # Send results to the main thread Queue for the dashboard updates
             try:
-                st.session_state.webrtc_queue.put_nowait((pred_class, conf, feedback, img.copy()))
-            except queue.Full:
-                pass # Ignore if the queue is full to prevent video lag
+                # Convert browser frame to OpenCV format
+                img = frame.to_ndarray(format="bgr24")
+                img = cv2.flip(img, 1) # Mirror the image
                 
-            # Send the drawn frame back to the browser widget
-            return av.VideoFrame.from_ndarray(img, format="bgr24")
+                # Run AI model
+                pred_class, conf, feedback, landmarks = yoga_ai._process_frame_logic(img, return_landmarks=True)
+                
+                # Draw the skeleton
+                if landmarks:
+                    img = draw_colored_skeleton(img, landmarks, feedback)
+                    
+                # Send results to the main thread Queue for the dashboard updates
+                try:
+                    st.session_state.webrtc_queue.put_nowait((pred_class, conf, feedback, img.copy()))
+                except queue.Full:
+                    pass # Ignore if the queue is full to prevent video lag
+                    
+                # Send the drawn frame back to the browser widget
+                return av.VideoFrame.from_ndarray(img, format="bgr24")
+                
+            except Exception as e:
+                # Catch any AI crashes so the video stream doesn't freeze
+                import traceback
+                print("🚨 WEBRTC BACKGROUND ERROR 🚨")
+                print(traceback.format_exc())
+                
+                # Return the raw, unprocessed frame to keep the video moving
+                return frame
 
         # 3. Start the WebRTC Streamer
         # This replaces your old st.toggle button
