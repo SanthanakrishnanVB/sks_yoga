@@ -11,6 +11,9 @@ import tempfile
 import uuid
 from fpdf import FPDF
 import pandas as pd
+from streamlit_webrtc import webrtc_streamer, RTCConfiguration
+import av
+import queue
 
 # ==========================================
 # PAGE CONFIGURATION & MOBILE-RESPONSIVE CSS
@@ -227,75 +230,103 @@ dynamic_bg_global = st.empty()
 # MAIN APP LOGIC
 # ==========================================
 
-# --- 1. LIVE WEBCAM MODE ---
+# --- 1. LIVE WEBCAM MODE (DEPLOYMENT READY) ---
 if selected == "Live Tracking":
     col_video, col_dashboard = st.columns([2, 1]) 
     
+    # 1. Setup a thread-safe queue to pass data from the video stream to the Streamlit UI
+    if 'webrtc_queue' not in st.session_state:
+        st.session_state.webrtc_queue = queue.Queue(maxsize=2)
+
     with col_video:
         st.markdown("### Real-Time Posture AI")
-        run_webcam = st.toggle("Toggle Webcam ON/OFF", value=False, key='webcam_toggle', on_change=reset_report)
-        frame_window = st.empty()
+        st.info("Click 'START' below and allow camera permissions.")
+        
+        # 2. The Video Callback: Processes the frame and draws the skeleton
+        def video_frame_callback(frame):
+            # Convert browser frame to OpenCV format
+            img = frame.to_ndarray(format="bgr24")
+            img = cv2.flip(img, 1) # Mirror the image
+            
+            # Run AI model
+            pred_class, conf, feedback, landmarks = yoga_ai._process_frame_logic(img, return_landmarks=True)
+            
+            # Draw the skeleton
+            if landmarks:
+                img = draw_colored_skeleton(img, landmarks, feedback)
+                
+            # Send results to the main thread Queue for the dashboard updates
+            try:
+                st.session_state.webrtc_queue.put_nowait((pred_class, conf, feedback, img.copy()))
+            except queue.Full:
+                pass # Ignore if the queue is full to prevent video lag
+                
+            # Send the drawn frame back to the browser widget
+            return av.VideoFrame.from_ndarray(img, format="bgr24")
+
+        # 3. Start the WebRTC Streamer
+        # This replaces your old st.toggle button
+        ctx = webrtc_streamer(
+            key="yoga_tracker",
+            video_frame_callback=video_frame_callback,
+            rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+            media_stream_constraints={"video": True, "audio": False},
+            async_processing=True
+        )
     
     with col_dashboard:
         st.markdown("###  Live Analysis")
+        # Empty placeholders for the dashboard
         ui_pose = st.empty()
         ui_conf = st.empty()
         ui_status = st.empty()
-        ui_feedback = st.empty() # Added placeholder for real-time text feedback
+        ui_feedback = st.empty() 
 
-    if run_webcam:
-        cap = cv2.VideoCapture(0)
-        last_capture_time = 0
+    # 4. Main Thread Loop: Update the UI and save PDF data while the video is playing
+    if ctx.state.playing:
+        last_capture_time = time.time()
         
-        while run_webcam:
-            ret, frame = cap.read()
-            if not ret: break
-            
-            frame = cv2.flip(frame, 1) 
-            pred_class, conf, feedback, landmarks = yoga_ai._process_frame_logic(frame, return_landmarks=True)
-            
-            if landmarks:
-                frame = draw_colored_skeleton(frame, landmarks, feedback)
-            
-            frame_window.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), use_container_width=True)
-            
-            ui_pose.markdown(f"<h2 style='text-align: center; color: #3498DB; padding: 15px; background-color: white; border-radius: 10px; box-shadow: 0px 4px 6px rgba(0,0,0,0.1); margin-bottom: 20px;'>🧘 {pred_class}</h2>", unsafe_allow_html=True)
-            ui_conf.progress(int(conf) / 100.0, text=f"Confidence: {conf:.1f}%")
-            
-            current_time = time.time()
-            if current_time - last_capture_time >= 1.0:
-                if feedback and "Please step into the frame" not in feedback[0]:
-                    img_path = os.path.join(TEMP_DIR, f"live_{int(current_time)}.jpg")
-                    cv2.imwrite(img_path, frame) 
-                    st.session_state.report_data.append({
-                        'time': time.strftime('%H:%M:%S'),
-                        'img_path': img_path,
-                        'feedback': feedback,
-                        'pose': pred_class,
-                        'conf': conf
-                    })
-                last_capture_time = current_time
-
-            # Handle Real-Time textual Feedback Display
-            if feedback and feedback[0] == "Perfect Posture!":
-                ui_status.success("🟢 Perfect Posture!")
-                ui_feedback.empty() # Clear out old errors
-                dynamic_bg_global.markdown("<style>.stApp { background-color: #4ade80 !important; }</style>", unsafe_allow_html=True)
-            elif feedback and "Please step into the frame" in feedback[0]:
-                ui_status.warning("🟡 Waiting for user...")
-                ui_feedback.empty()
-                dynamic_bg_global.markdown("<style>.stApp { background-color: #F4F7F6 !important; }</style>", unsafe_allow_html=True)
-            else:
-                ui_status.error("🔴 Corrections needed:")
-                # Create a bulleted list for immediate real-time feedback
-                feedback_html = "".join([f"<li>{f}</li>" for f in feedback])
-                ui_feedback.markdown(f"<ul style='color: #E74C3C; font-weight: bold;'>{feedback_html}</ul>", unsafe_allow_html=True)
-                dynamic_bg_global.markdown("<style>.stApp { background-color: #F4F7F6 !important; }</style>", unsafe_allow_html=True)
+        while ctx.state.playing:
+            try:
+                # Pull the latest data from the background video thread
+                pred_class, conf, feedback, frame_copy = st.session_state.webrtc_queue.get(timeout=1.0)
                 
-        cap.release()
-        dynamic_bg_global.markdown("<style>.stApp { background-color: #F4F7F6 !important; }</style>", unsafe_allow_html=True)
-        
-    if not run_webcam and len(st.session_state.report_data) > 0:
+                # Update Dashboard UI Elements
+                ui_pose.markdown(f"<h2 style='text-align: center; color: #3498DB; padding: 15px; background-color: white; border-radius: 10px; box-shadow: 0px 4px 6px rgba(0,0,0,0.1); margin-bottom: 20px;'>🧘 {pred_class}</h2>", unsafe_allow_html=True)
+                ui_conf.progress(int(conf) / 100.0, text=f"Confidence: {conf:.1f}%")
+                
+                # Extract frames for the PDF Report every 1 second
+                current_time = time.time()
+                if current_time - last_capture_time >= 1.0:
+                    if feedback and "Please step into the frame" not in feedback[0]:
+                        img_path = os.path.join(TEMP_DIR, f"live_{int(current_time)}.jpg")
+                        cv2.imwrite(img_path, frame_copy) 
+                        st.session_state.report_data.append({
+                            'time': time.strftime('%H:%M:%S'),
+                            'img_path': img_path,
+                            'feedback': feedback,
+                            'pose': pred_class,
+                            'conf': conf
+                        })
+                    last_capture_time = current_time
+
+                # Update Textual Feedback UI
+                if feedback and feedback[0] == "Perfect Posture!":
+                    ui_status.success("🟢 Perfect Posture!")
+                    ui_feedback.empty()
+                elif feedback and "Please step into the frame" in feedback[0]:
+                    ui_status.warning("🟡 Waiting for user...")
+                    ui_feedback.empty()
+                else:
+                    ui_status.error("🔴 Corrections needed:")
+                    feedback_html = "".join([f"<li>{f}</li>" for f in feedback])
+                    ui_feedback.markdown(f"<ul style='color: #E74C3C; font-weight: bold;'>{feedback_html}</ul>", unsafe_allow_html=True)
+                    
+            except queue.Empty:
+                pass # If no new frame arrived yet, just loop again
+                
+    # 5. Generate PDF (Triggers automatically when the user clicks 'STOP' on the camera)
+    if not ctx.state.playing and len(st.session_state.report_data) > 0:
         st.success("Session finished! Download your posture report below.")
         pdf_bytes = create_pdf_report(st.session_state.report_data)
         st.download_button(
