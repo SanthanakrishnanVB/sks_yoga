@@ -15,6 +15,8 @@ from streamlit_webrtc import webrtc_streamer, RTCConfiguration
 import av
 import queue
 import traceback
+import av
+import numpy as np
 # ==========================================
 # PAGE CONFIGURATION & MOBILE-RESPONSIVE CSS
 # ==========================================
@@ -247,33 +249,39 @@ if selected == "Live Tracking":
         st.markdown("### Real-Time Posture AI")
         st.info("Click 'START' below and allow camera permissions.")
         
-        # 2. The Video Callback
-        def video_frame_callback(frame):
-            try:
-                # Convert browser frame to OpenCV format
-                img = frame.to_ndarray(format="bgr24")
-                img = cv2.flip(img, 1) # Mirror the image
-                
-                # Run AI model
-                pred_class, conf, feedback, landmarks = yoga_ai._process_frame_logic(img, return_landmarks=True)
-                
-                # Draw the skeleton
-                if landmarks:
-                    img = draw_colored_skeleton(img, landmarks, feedback)
-                    
-                # 🚨 THE FIX: Use the local 'video_queue' variable here! 🚨
-                try:
-                    video_queue.put_nowait((pred_class, conf, feedback, img.copy()))
-                except queue.Full:
-                    pass 
-                    
-                return av.VideoFrame.from_ndarray(img, format="bgr24")
-                
-            except Exception as e:
-                import traceback
-                print("🚨 WEBRTC BACKGROUND ERROR 🚨")
-                print(traceback.format_exc())
-                return frame
+      # 2. The Video Callback
+def video_frame_callback(frame):
+    try:
+        # 1. Convert browser frame to OpenCV format (BGR is standard for OpenCV drawing)
+        img = frame.to_ndarray(format="bgr24")
+        img = cv2.flip(img, 1) # Mirror the image
+        
+        # 2. Create an RGB copy strictly for the MediaPipe model
+        # MediaPipe expects RGB; feeding it BGR lowers accuracy or causes errors
+        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        
+        # 3. Run AI model using the RGB image
+        # Note: Ensure `yoga_ai._process_frame_logic` no longer does the BGR->RGB conversion itself!
+        pred_class, conf, feedback, landmarks = yoga_ai._process_frame_logic(img_rgb, return_landmarks=True)
+        
+        # 4. Draw the skeleton on the original BGR image so colors render correctly
+        if landmarks:
+            img = draw_colored_skeleton(img, landmarks, feedback)
+            
+        # 🚨 THE FIX: Use the local 'video_queue' variable here! 🚨
+        try:
+            video_queue.put_nowait((pred_class, conf, feedback, img.copy()))
+        except queue.Full:
+            pass 
+            
+        # 5. Return the BGR image to render correctly in the browser
+        return av.VideoFrame.from_ndarray(img, format="bgr24")
+        
+    except Exception as e:
+        import traceback
+        print("🚨 WEBRTC BACKGROUND ERROR 🚨")
+        print(traceback.format_exc())
+        return frame
 
         # 3. Start the WebRTC Streamer
         # This replaces your old st.toggle button
