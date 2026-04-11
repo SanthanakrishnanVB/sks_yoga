@@ -325,7 +325,11 @@ class YogaSystem:
         img = cv2.imread(input_path)
         if img is None: print("Error: Image not found"); return
         
-        pred_class, conf, feedback = self._process_frame_logic(img)
+        # 🚨 FIX: Convert to RGB here before passing to AI
+        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        pred_class, conf, feedback = self._process_frame_logic(img_rgb)
+        
+        # Use original BGR 'img' for drawing results
         self.show_results(img, pred_class, conf, feedback)
 
     def analyze_webcam(self, video_path=None):
@@ -358,7 +362,9 @@ class YogaSystem:
                     
                 display_frame = frame.copy()
 
-                pred_class, conf, feedback, landmarks = self._process_frame_logic(frame, return_landmarks=True)
+                # 🚨 FIX: Convert to RGB here before passing to AI
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                pred_class, conf, feedback, landmarks = self._process_frame_logic(frame_rgb, return_landmarks=True)
 
                 if landmarks:
                     mp.solutions.drawing_utils.draw_landmarks(
@@ -380,9 +386,11 @@ class YogaSystem:
             cap.release()
             cv2.destroyAllWindows()
 
-    def _process_frame_logic(self, img, return_landmarks=False):
-        """Core logic separated so it can be used for both Images and Webcam"""
-        image_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    def _process_frame_logic(self, image_rgb, return_landmarks=False):
+        """Core logic separated so it can be used for both Images and Webcam.
+           🚨 FIX: Now strictly expects an RGB numpy array 🚨"""
+           
+        # Color conversion removed from here so it doesn't double-convert WebRTC frames
         res = self.mp_pose.process(image_rgb)
         
         if not res.pose_landmarks: 
@@ -419,11 +427,10 @@ class YogaSystem:
         pose_lower = pred_class.lower()
         current_tolerance = STRICT_TOLERANCE
         
-        #STRICT PADMASANA LOGIC 
+        # STRICT PADMASANA LOGIC 
         if "padam" in pose_lower or "padma" in pose_lower or "lotus" in pose_lower:
             current_tolerance = 15.0 # Keep strict tolerance for angles
             
-          
             l_knee_y = single_frame[25][1] # Left Knee Y
             r_knee_y = single_frame[26][1] # Right Knee Y
             l_ankle_y = single_frame[27][1] # Left Ankle Y
@@ -471,8 +478,6 @@ class YogaSystem:
             return pred_class, confidence_val, feedback, res.pose_landmarks
         return pred_class, confidence_val, feedback
 
-   
-
     def show_results(self, img, cls, conf, feedback):
         h, w, _ = img.shape
         line_spacing = 40
@@ -512,9 +517,7 @@ class YogaSystem:
         # THE FIX: Return the image directly to Streamlit!
         return final_output
 
-
-    # WEBCAM
-# WEBCAM & VIDEO
+    # WEBCAM & VIDEO
     def show_live_results(self, img, cls, conf, feedback):
         h, w, _ = img.shape
         
